@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import os
 import time
 import urllib.parse
@@ -232,8 +233,12 @@ class WikiFetcher:
                         "description", ""
                     )
 
+                event_id = hashlib.sha256(
+                    f"{event_type}:{year}:{text}".encode("utf-8")
+                ).hexdigest()[:12]
                 events.append(
                     OnThisDayEvent(
+                        event_id=event_id,
                         year=int(year) if year is not None else None,
                         description=text,
                         related_titles=related,

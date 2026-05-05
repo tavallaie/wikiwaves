@@ -12,12 +12,14 @@ class OnThisDayEvent:
     """A single event from Wikipedia's "On this day" feed.
 
     Attributes:
+        event_id: Stable unique identifier (hash of year + description).
         year: The year the event occurred. ``None`` for undated items (e.g. holidays).
         description: Human-readable summary of the event.
         related_titles: Canonical titles of related Wikipedia articles.
         event_type: Category of the event in the feed.
     """
 
+    event_id: str
     year: int | None
     description: str
     related_titles: list[str] = field(default_factory=list)
