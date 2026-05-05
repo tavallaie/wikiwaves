@@ -21,8 +21,11 @@
 
 ```
 src/wikiwaves/
-  __init__.py      # CLI entry point (`wikiwaves:main`)
-  collector.py     # WikimediaFeaturedFetcher class — core logic
+  __init__.py         # CLI entry point (`wikiwaves:main`)
+  collector.py        # WikimediaFeaturedFetcher class — core logic
+  fetcher/            # Wikipedia data acquisition
+  curator/            # Topic selection and scoring
+  enricher/           # LLM-powered content expansion
 ```
 
 ## Environment Variables
@@ -41,6 +44,9 @@ Optional:
 |----------|---------|
 | `WM_CLIENT_ID` | OAuth client ID |
 | `WM_CLIENT_SECRET` | OAuth client secret |
+| `LLM_API_KEY` | API key for the LLM provider (OpenAI-compatible) |
+| `LLM_BASE_URL` | Base URL for the LLM API (default: `https://api.openai.com/v1`) |
+| `LLM_MODEL` | Model name for link suggestion / dialogue generation (default: `gpt-4o-mini`) |
 
 Load via `python-dotenv` (automatically in `WikimediaFeaturedFetcher`).
 
