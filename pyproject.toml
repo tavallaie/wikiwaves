@@ -19,3 +19,9 @@ wikiwaves = "wikiwaves:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "responses>=0.25",
+]
