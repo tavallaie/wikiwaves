@@ -121,7 +121,7 @@ Fetcher  →  Curator  →  Enricher  →  [Scripter  →  TTS  →  Assembler]
 ## Testing
 
 ```bash
-uv run pytest -v
+uv run python -m unittest discover -s tests -v
 ```
 
 All 59 tests should pass.
@@ -136,7 +136,7 @@ All 59 tests should pass.
 - **HTTP**: `requests`
 - **Logging**: `loguru`
 - **Env files**: `python-dotenv`
-- **Testing**: `pytest`, `responses`
+- **Testing**: `unittest`, `responses`
 
 ---
 
