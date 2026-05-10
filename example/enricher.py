@@ -22,7 +22,8 @@ from dataclasses import asdict
 from dotenv import load_dotenv
 from loguru import logger
 
-from wikiwaves.enricher import EnrichedTopic, LLMClient, enrich_pages
+from wikiwaves.enricher import EnrichedTopic, enrich_pages
+from wikiwaves.llm import LLMClient
 from wikiwaves.fetcher import WikiFetcher
 
 OUTPUT_DIR = "output"

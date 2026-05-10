@@ -14,7 +14,8 @@ from loguru import logger
 
 from wikiwaves.curator import aggregate_events, curate
 from wikiwaves.curator.models import CuratedEpisode
-from wikiwaves.enricher import LLMClient, enrich_pages
+from wikiwaves.enricher import enrich_pages
+from wikiwaves.llm import LLMClient
 from wikiwaves.enricher.models import EnrichedTopic
 from wikiwaves.fetcher import WikiFetcher
 from wikiwaves.fetcher.models import OnThisDayEvent, TrendingEdit

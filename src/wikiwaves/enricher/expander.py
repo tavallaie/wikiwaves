@@ -10,7 +10,7 @@ from loguru import logger
 from wikiwaves.fetcher import WikiFetcher
 from wikiwaves.fetcher.models import WikiPage
 
-from .llm_client import LLMClient, LLMError
+from wikiwaves.llm import LLMClient, LLMError
 from .models import EnrichedTopic
 from .prompts import build_link_suggestion_prompt
 from .validators import validate_suggestions
