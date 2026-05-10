@@ -348,6 +348,7 @@ class WikiFetcher:
             "prop": "extracts|links|extlinks|info|categories",
             "titles": "|".join(titles),
             "explaintext": 1,
+            "exintro": 1,
             "exlimit": "max",
             "pllimit": "max",
             "ellimit": "max",
