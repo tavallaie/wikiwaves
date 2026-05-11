@@ -298,8 +298,8 @@ class WikiFetcher:
         return edits
 
     def fetch_page(self, title: str) -> WikiPage | None:
-        """Fetch a single Wikipedia page with full metadata and HTML."""
-        pages = self._fetch_pages_batch([title])
+        """Fetch a single Wikipedia page with full metadata, HTML, and *full* text."""
+        pages = self._fetch_pages_batch([title], exintro=False)
         page = pages.get(title)
         if page is None:
             return None
@@ -341,14 +341,24 @@ class WikiFetcher:
             results.update(self._fetch_pages_batch(batch))
         return results
 
-    def _fetch_pages_batch(self, titles: list[str]) -> dict[str, WikiPage | None]:
-        """Query up to :attr:`MAX_TITLES_PER_QUERY` pages via ``action=query``."""
-        params: dict[str, str | int] = {
+    def _fetch_pages_batch(
+        self, titles: list[str], exintro: bool = True
+    ) -> dict[str, WikiPage | None]:
+        """Query up to :attr:`MAX_TITLES_PER_QUERY` pages via ``action=query``.
+
+        Args:
+            titles: Page titles to fetch.
+            exintro: If ``True`` (default), only the intro/lead section is
+                returned. If ``False``, the full article extract is requested.
+                **Only use ``exintro=False`` with a single title** — the
+                MediaWiki API reliably returns full extracts for only one
+                page per request.
+        """
+        params: dict[str, str | int | None] = {
             "action": "query",
             "prop": "extracts|links|extlinks|info|categories",
             "titles": "|".join(titles),
             "explaintext": 1,
-            "exintro": 1,
             "exlimit": "max",
             "pllimit": "max",
             "ellimit": "max",
@@ -360,6 +370,8 @@ class WikiFetcher:
             "redirects": 1,
             "format": "json",
         }
+        if exintro:
+            params["exintro"] = 1
 
         logger.debug(f"Fetching batch of {len(titles)} pages")
         data = self._get_json(self.API_BASE, params=params)
