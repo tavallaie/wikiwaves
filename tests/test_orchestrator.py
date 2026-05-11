@@ -61,18 +61,21 @@ class FakeFetcher:
     def fetch_pages(self, titles):
         return {t: self._pages.get(t) for t in titles}
 
+    def fetch_page(self, title):
+        return self._pages.get(title)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _event(title: str, year: int = 2000) -> OnThisDayEvent:
+def _event(title: str, year: int = 2000, related: list[str] | None = None) -> OnThisDayEvent:
     return OnThisDayEvent(
         event_id=f"evt-{title}",
         year=year,
         description=f"Something about {title}",
-        related_titles=[title],
+        related_titles=related or [title],
         event_type="selected",
     )
 
@@ -130,13 +133,16 @@ class TestFullRun(unittest.TestCase):
     def test_run_success(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = pathlib.Path(tmp)
-            events = [_event("Napoleon", year=1821)]
+            events = [_event("Napoleon", year=1821, related=["Napoleon", "France"])]
             edits = [_edit("Napoleon", bytes_changed=2400)]
-            metrics = {"Napoleon": _metrics("Napoleon", word_count=2000)}
+            metrics = {
+                "Napoleon": _metrics("Napoleon", word_count=2000),
+                "France": _metrics("France", word_count=800),
+            }
             pages = {"Napoleon": _page("Napoleon", word_count=2000, links=["France", "Waterloo"])}
             llm_response = {
-                "suggestions": [{"title": "France", "reason": "Country"}],
-                "explanation": "Adds context.",
+                "source_context": "Napoleon was Emperor of France.",
+                "reasoning": "Combined Napoleon and France sources.",
             }
             fake_pages = {"France": _page("France", word_count=800)}
 

@@ -75,7 +75,7 @@ class TestLLMClientChat(unittest.TestCase):
             status=200,
         )
 
-        client = LLMClient(api_key="test-key")
+        client = LLMClient(api_key="test-key", base_url="https://api.openai.com/v1")
         result = client.chat([{"role": "user", "content": "Hi"}])
 
         self.assertEqual(result, "Hello!")
@@ -93,7 +93,7 @@ class TestLLMClientChat(unittest.TestCase):
             status=200,
         )
 
-        client = LLMClient()
+        client = LLMClient(base_url="https://api.openai.com/v1")
         client.chat([{"role": "user", "content": "Hi"}])
 
         req = responses.calls[0].request
@@ -106,7 +106,7 @@ class TestLLMClientChat(unittest.TestCase):
             body=__import__("requests").ConnectionError("Refused"),
         )
 
-        client = LLMClient()
+        client = LLMClient(base_url="https://api.openai.com/v1")
         with self.assertRaises(LLMError) as ctx:
             client.chat([{"role": "user", "content": "Hi"}])
         self.assertIn("Refused", str(ctx.exception))
@@ -119,7 +119,7 @@ class TestLLMClientChat(unittest.TestCase):
             status=200,
         )
 
-        client = LLMClient()
+        client = LLMClient(base_url="https://api.openai.com/v1")
         with self.assertRaises(LLMError) as ctx:
             client.chat([{"role": "user", "content": "Hi"}])
         self.assertIn("Could not parse LLM response", str(ctx.exception))
