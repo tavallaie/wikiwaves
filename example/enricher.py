@@ -1,8 +1,8 @@
 """
 WikiWaves Enricher — Example Runner
 ====================================
-Takes the curated episode from example/curator.py, fetches full base pages,
-and runs the LLM enricher to gather related articles for each topic.
+Takes the curated episode from example/curator.py and runs the LLM enricher
+to synthesize combined source context for each topic.
 
 Prerequisites:
     1. uv run python example/fetcher.py
@@ -22,7 +22,9 @@ from dataclasses import asdict
 from dotenv import load_dotenv
 from loguru import logger
 
-from wikiwaves.enricher import EnrichedTopic, enrich_pages
+from wikiwaves.curator.models import AggregatedEvent
+from wikiwaves.enricher import EnrichedTopic, enrich_topics
+from wikiwaves.fetcher.models import PageMetrics
 from wikiwaves.llm import LLMClient
 from wikiwaves.fetcher import WikiFetcher
 
@@ -52,6 +54,7 @@ def _serialize_enriched(topics: list[EnrichedTopic]) -> list[dict]:
             "base_page": asdict(t.base_page),
             "related_pages": [asdict(p) for p in t.related_pages],
             "reasoning": t.reasoning,
+            "source_context": t.source_context,
             "combined_word_count": t.combined_word_count,
         }
         for t in topics
@@ -72,8 +75,6 @@ def main() -> None:
         logger.error(f"Cannot initialise fetcher: {exc}")
         raise SystemExit(1)
 
-    # Optional: LLMClient will read LLM_API_KEY etc. from env.
-    # If no key is configured the enricher falls back to base-only topics.
     try:
         llm_client = LLMClient()
     except Exception as exc:
@@ -82,29 +83,31 @@ def main() -> None:
 
     logger.info("Loading curated episode...")
     curated = _load_json(curated_path)
-    topics = curated.get("topics", [])
+    raw_topics = curated.get("topics", [])
 
-    if not topics:
+    if not raw_topics:
         logger.warning("No topics found in curated episode.")
         sys.exit(0)
 
-    # Pick the first related page of each topic as the base article
-    base_titles: list[str] = []
-    for topic in topics:
-        related = topic.get("related_pages", [])
-        if related:
-            base_titles.append(related[0]["title"])
+    # Reconstruct AggregatedEvent objects from JSON
+    events: list[AggregatedEvent] = []
+    for t in raw_topics:
+        related = [
+            PageMetrics(**p) if isinstance(p, dict) else p
+            for p in t.get("related_pages", [])
+        ]
+        events.append(
+            AggregatedEvent(
+                event_id=t.get("event_id", ""),
+                year=t.get("year"),
+                description=t.get("description", ""),
+                event_type=t.get("event_type", "selected"),
+                related_pages=related,
+            )
+        )
 
-    logger.info(f"Fetching full base pages for {len(base_titles)} topic(s)...")
-    base_pages_map = fetcher.fetch_pages(base_titles)
-    base_pages = [p for p in (base_pages_map.get(t) for t in base_titles) if p is not None]
-
-    if not base_pages:
-        logger.error("Could not fetch any base pages.")
-        sys.exit(1)
-
-    logger.info("Running enricher...")
-    enriched = enrich_pages(base_pages, fetcher, llm_client)
+    logger.info(f"Running enricher for {len(events)} topic(s)...")
+    enriched = enrich_topics(events, fetcher, llm_client)
 
     _save("01_enriched_topics", _serialize_enriched(enriched))
 
@@ -119,11 +122,14 @@ def main() -> None:
         if topic.reasoning:
             print(f"   Reasoning: {topic.reasoning}")
         if topic.related_pages:
-            print(f"   Related articles:")
+            print(f"   Context articles:")
             for p in topic.related_pages:
                 print(f"      • {p.title} ({p.word_count} words)")
+        if topic.source_context:
+            preview = topic.source_context[:200].replace("\n", " ")
+            print(f"   Context preview: {preview}...")
         else:
-            print("   (no related articles)")
+            print("   (no source context)")
 
     print(f"\n{'=' * 60}")
     print("✅ Enricher example complete.")
