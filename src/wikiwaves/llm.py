@@ -18,7 +18,7 @@ class LLMClient:
 
     DEFAULT_BASE_URL = "https://api.openai.com/v1"
     DEFAULT_MODEL = "gpt-4o-mini"
-    DEFAULT_TIMEOUT = 60.0
+    DEFAULT_TIMEOUT = 300.0
 
     def __init__(
         self,
@@ -33,24 +33,36 @@ class LLMClient:
         elif os.path.exists(".env"):
             load_dotenv()
 
-        self.api_key = api_key or os.getenv("LLM_API_KEY")
-        self.base_url = (base_url or os.getenv("LLM_BASE_URL", self.DEFAULT_BASE_URL)).rstrip("/")
-        self.model = model or os.getenv("LLM_MODEL", self.DEFAULT_MODEL)
+        self.api_key = api_key if api_key is not None else os.getenv("LLM_API_KEY")
+        self.base_url = (
+            base_url if base_url is not None else os.getenv("LLM_BASE_URL", self.DEFAULT_BASE_URL)
+        ).rstrip("/")
+        self.model = model if model is not None else os.getenv("LLM_MODEL", self.DEFAULT_MODEL)
         self.timeout = timeout
 
         logger.debug(f"LLMClient initialised (model={self.model}, base={self.base_url})")
 
-    def chat(self, messages: list[dict[str, str]], temperature: float = 0.3) -> str:
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+        frequency_penalty: float | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
         """Send a chat-completion request and return the assistant's text."""
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        payload = {
+        payload: dict[str, object] = {
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
         }
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
 
         url = f"{self.base_url}/chat/completions"
         try:
