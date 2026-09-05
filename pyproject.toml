@@ -6,12 +6,18 @@ readme = "README.md"
 authors = [
     { name = "Ali Tavallaie", email = "a.tavallaie@gmail.com" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
-    "chatterbox-tts>=0.1.7",
+    "huggingface-hub>=0.20",
     "loguru>=0.7.3",
+    "numpy>=1.26.4",
+    "onnxruntime>=1.23",
+    "opencv-python>=4.11.0.86",
     "python-dotenv>=1.1.0",
     "requests>=2.32.3",
+    "soundfile>=0.13.1",
+    "supertonic>=1.2.0",
+    "visgen>=0.2.2",
 ]
 
 [project.scripts]

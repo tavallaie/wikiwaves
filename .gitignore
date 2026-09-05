@@ -12,3 +12,7 @@ wheels/
 output/
 assets/
 tmp/
+
+# TTS model weights (large ONNX binaries)
+src/wikiwaves/tts/onnx/
+src/wikiwaves/tts/voice_styles/

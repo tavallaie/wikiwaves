@@ -14,11 +14,13 @@ from loguru import logger
 
 from wikiwaves.curator import aggregate_events, curate
 from wikiwaves.curator.models import CuratedEpisode
-from wikiwaves.enricher import enrich_pages
+from wikiwaves.enricher import enrich_topics
 from wikiwaves.llm import LLMClient
 from wikiwaves.enricher.models import EnrichedTopic
 from wikiwaves.fetcher import WikiFetcher
 from wikiwaves.fetcher.models import OnThisDayEvent, TrendingEdit
+from wikiwaves.scripter import write_episode_intro, write_topic_script, write_transition
+from wikiwaves.scripter.models import TopicScript
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +137,14 @@ class PipelineOrchestrator:
             errors.append("Enrichment stage failed")
             errors.extend(report.errors)
 
-        # TODO: Stage 4+ — Scripter, TTS, Assembler, Renderer
+        # Stage 4: Script Writer
+        scripts, report = self._run_scriptwriter(topics, episode)
+        reports.append(report)
+        if report.status == "failed":
+            errors.append("Script writer stage failed")
+            errors.extend(report.errors)
+
+        # TODO: Stage 5+ — TTS, Assembler, Renderer
 
         fun_facts = self._extract_fun_facts(edits)
         result = self._build_result(
@@ -241,14 +250,7 @@ class PipelineOrchestrator:
     ) -> tuple[list[EnrichedTopic], StageReport]:
         stage_start = time.perf_counter()
         try:
-            # Pick the longest related page as the base article for each topic
-            base_titles: list[str] = []
-            for topic in episode.topics:
-                if topic.related_pages:
-                    best = max(topic.related_pages, key=lambda p: p.word_count or 0)
-                    base_titles.append(best.title)
-
-            if not base_titles:
+            if not episode.topics:
                 return (
                     [],
                     StageReport(
@@ -259,16 +261,9 @@ class PipelineOrchestrator:
                     ),
                 )
 
-            base_pages_map = self.fetcher.fetch_pages(base_titles)
-            base_pages = [
-                p for p in (base_pages_map.get(t) for t in base_titles) if p is not None
-            ]
-            self._save_json(
-                self._tmp_path("base_pages.json"),
-                [asdict(p) for p in base_pages],
+            enriched = enrich_topics(
+                episode.topics, self.fetcher, self.llm_client
             )
-
-            enriched = enrich_pages(base_pages, self.fetcher, self.llm_client)
             self._save_json(
                 self._tmp_path("enriched_pages.json"),
                 [asdict(t) for t in enriched],
@@ -278,11 +273,25 @@ class PipelineOrchestrator:
                 [asdict(t) for t in enriched],
             )
 
+            # Write individual source-context files per topic
+            for i, topic in enumerate(enriched, 1):
+                safe_title = topic.base_page.title.replace(" ", "_").replace("/", "-")
+                ctx_path = self._out_path(f"topic_{i:02d}_{safe_title}.txt")
+                with open(ctx_path, "w", encoding="utf-8") as f:
+                    f.write(f"Topic: {topic.base_page.title}\n")
+                    f.write(f"Year: {episode.topics[i - 1].year}\n")
+                    f.write(f"Event: {episode.topics[i - 1].description}\n")
+                    f.write(f"Word count: {topic.combined_word_count}\n")
+                    f.write(f"Related articles: {', '.join(p.title for p in topic.related_pages) or 'none'}\n")
+                    f.write("-" * 60 + "\n\n")
+                    f.write(topic.source_context or "(no source context generated)\n")
+                logger.info(f"Saved topic source context → {ctx_path}")
+
             report = StageReport(
                 name="enrich",
                 status="success",
                 runtime_seconds=time.perf_counter() - stage_start,
-                input_count=len(base_pages),
+                input_count=len(episode.topics),
                 output_count=sum(1 + len(t.related_pages) for t in enriched),
             )
             return enriched, report
@@ -295,6 +304,171 @@ class PipelineOrchestrator:
                 errors=[str(exc)],
             )
             return [], report
+
+    def _run_scriptwriter(
+        self,
+        enriched: list[EnrichedTopic],
+        episode: CuratedEpisode,
+    ) -> tuple[list[TopicScript], StageReport]:
+        """Generate podcast scripts for all enriched topics."""
+        stage_start = time.perf_counter()
+
+        if not enriched or not self.llm_client:
+            return (
+                [],
+                StageReport(
+                    name="scriptwriter",
+                    status="success",
+                    runtime_seconds=time.perf_counter() - stage_start,
+                    output_count=0,
+                ),
+            )
+
+        scripts: list[TopicScript] = []
+        try:
+            # Generate episode intro first
+            intro_topics = [
+                {
+                    "title": t.base_page.title,
+                    "year": episode.topics[i].year,
+                    "event_description": episode.topics[i].description,
+                }
+                for i, t in enumerate(enriched)
+            ]
+            intro = write_episode_intro(
+                date=self.date_str,
+                topics=intro_topics,
+                llm_client=self.llm_client,
+            )
+            intro_path = self._out_path("script_00_intro.json")
+            self._save_json(
+                intro_path,
+                {
+                    "topic_title": intro.topic_title,
+                    "estimated_duration_minutes": intro.estimated_duration_minutes,
+                    "chunks": [
+                        {
+                            "speaker": c.speaker,
+                            "segment": c.segment,
+                            "text": c.text,
+                            "emotion": c.emotion,
+                        }
+                        for c in intro.chunks
+                    ],
+                },
+            )
+            logger.info(f"Saved intro → {intro_path}")
+            scripts.append(intro)
+
+            for i, topic in enumerate(enriched):
+                event = episode.topics[i]
+                script = write_topic_script(
+                    title=topic.base_page.title,
+                    year=event.year,
+                    event_description=event.description,
+                    source_context=topic.source_context,
+                    llm_client=self.llm_client,
+                )
+                scripts.append(script)
+
+                # Save individual script as JSON
+                safe_title = topic.base_page.title.replace(" ", "_").replace("/", "-")
+                script_path = self._out_path(f"script_{i + 1:02d}_{safe_title}.json")
+                self._save_json(
+                    script_path,
+                    {
+                        "topic_title": script.topic_title,
+                        "year": script.year,
+                        "event_description": script.event_description,
+                        "estimated_duration_minutes": script.estimated_duration_minutes,
+                        "chunks": [
+                            {
+                                "speaker": c.speaker,
+                                "segment": c.segment,
+                                "text": c.text,
+                                "emotion": c.emotion,
+                            }
+                            for c in script.chunks
+                        ],
+                    },
+                )
+                logger.info(f"Saved script → {script_path}")
+
+                # Generate transition to next topic (if not the last one)
+                if i < len(enriched) - 1:
+                    next_topic = enriched[i + 1]
+                    next_event = episode.topics[i + 1]
+                    transition = write_transition(
+                        prev_title=topic.base_page.title,
+                        prev_year=event.year,
+                        prev_description=event.description,
+                        next_title=next_topic.base_page.title,
+                        next_year=next_event.year,
+                        next_description=next_event.description,
+                        llm_client=self.llm_client,
+                    )
+                    scripts.append(transition)
+                    trans_path = self._out_path(
+                        f"script_{i + 1:02d}_to_{i + 2:02d}_transition.json"
+                    )
+                    self._save_json(
+                        trans_path,
+                        {
+                            "topic_title": transition.topic_title,
+                            "estimated_duration_minutes": transition.estimated_duration_minutes,
+                            "chunks": [
+                                {
+                                    "speaker": c.speaker,
+                                    "segment": c.segment,
+                                    "text": c.text,
+                                    "emotion": c.emotion,
+                                }
+                                for c in transition.chunks
+                            ],
+                        },
+                    )
+                    logger.info(f"Saved transition → {trans_path}")
+
+            # Save combined scripts
+            self._save_json(
+                self._out_path("scripts.json"),
+                [
+                    {
+                        "topic_title": s.topic_title,
+                        "year": s.year,
+                        "event_description": s.event_description,
+                        "estimated_duration_minutes": s.estimated_duration_minutes,
+                        "chunks": [
+                            {
+                                "speaker": c.speaker,
+                                "segment": c.segment,
+                                "text": c.text,
+                                "emotion": c.emotion,
+                            }
+                            for c in s.chunks
+                        ],
+                    }
+                    for s in scripts
+                ],
+            )
+
+            report = StageReport(
+                name="scriptwriter",
+                status="success",
+                runtime_seconds=time.perf_counter() - stage_start,
+                input_count=len(enriched),
+                output_count=len(scripts),
+            )
+            return scripts, report
+        except Exception as exc:
+            logger.error(f"Script writer failed: {exc}")
+            report = StageReport(
+                name="scriptwriter",
+                status="failed",
+                runtime_seconds=time.perf_counter() - stage_start,
+                errors=[str(exc)],
+            )
+            return scripts, report
 
     # ------------------------------------------------------------------ #
     # Fun facts (placeholder — will move to dedicated module later)
