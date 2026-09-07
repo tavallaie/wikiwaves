@@ -150,7 +150,13 @@ def create_engine(
     auto_download: bool = True,
     total_steps: int = 5,
     speed: float = 1.0,
+    backend: str = "supertonic",
 ) -> TTSEngine:
     """Factory — creates and warms up the engine."""
-    engine = TTSEngine(auto_download=auto_download, total_steps=total_steps, speed=speed)
-    return engine
+    if backend in ("supertonic", "super"):
+        return TTSEngine(auto_download=auto_download, total_steps=total_steps, speed=speed)
+    if backend in ("pockettts", "pocket"):
+        from wikiwaves.tts.pocket import PocketTTSEngine
+
+        return PocketTTSEngine(sampler_decode_steps=total_steps)
+    raise ValueError(f"Unknown TTS backend: {backend!r}")

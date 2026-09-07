@@ -3,6 +3,7 @@
 Usage:
     uv run python -m wikiwaves.tts.runner 2026-05-11
     uv run python -m wikiwaves.tts.runner 2026-05-11 --voice M2 --host-voice F1 --steps 5
+    uv run python -m wikiwaves.tts.runner 2026-05-11 --backend pockettts --voice alba
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Callable
 import numpy as np
 from loguru import logger
 
-from wikiwaves.tts.engine import TTSEngine
+from wikiwaves.tts.engine import TTSEngine, create_engine
 
 
 # --------------------------------------------------------------------------- #
@@ -345,6 +346,7 @@ def run(
     voice_mapper: Callable[[ScriptSegment, str, str | None], str] | None = None,
     max_chunk_length: int = 300,
     silence_duration: float = 0.3,
+    backend: str = "supertonic",
 ) -> list[Path]:
     """Generate audio for all scripts in a date folder."""
     date_str = date_str or datetime.date.today().isoformat()
@@ -356,7 +358,10 @@ def run(
         logger.warning("No scripts found.")
         return []
 
-    engine = TTSEngine(total_steps=total_steps, speed=speed)
+    if backend in ("pockettts", "pocket") and voice == "M1":
+        voice = "alba"
+
+    engine = create_engine(backend=backend, total_steps=total_steps, speed=speed)
     logger.info(
         f"TTS engine ready — default voice: {voice}, steps: {total_steps}, speed: {speed}"
     )
@@ -401,6 +406,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--prefer", default="txt", choices=["json", "txt"], help="Prefer .txt files or scripts.json."
     )
+    parser.add_argument(
+        "--backend",
+        default="supertonic",
+        choices=["supertonic", "pockettts"],
+        help="TTS backend (supertonic or pockettts).",
+    )
     args = parser.parse_args()
 
     run(
@@ -413,4 +424,5 @@ if __name__ == "__main__":
         silence_between=args.silence,
         concat=args.concat,
         prefer=args.prefer,
+        backend=args.backend,
     )
