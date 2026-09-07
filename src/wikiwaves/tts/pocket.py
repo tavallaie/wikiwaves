@@ -14,10 +14,13 @@ class PocketTTSEngine:
 
     def __init__(
         self,
-        language: str = "english",
+        language: str | None = "english",
+        config: str | None = None,
         sampler_decode_steps: int = 1,
         temp: float | None = None,
         quantize: bool = False,
+        eos_threshold: float = -4.0,
+        frames_after_eos: int | None = None,
     ):
         try:
             from pocket_tts import TTSModel
@@ -28,12 +31,20 @@ class PocketTTSEngine:
                 "  or: pip install pocket-tts"
             ) from exc
 
-        self._tts = TTSModel.load_model(
-            language=language,
-            sampler_decode_steps=sampler_decode_steps,
-            temp=temp,
-            quantize=quantize,
-        )
+        load_kwargs: dict = {
+            "sampler_decode_steps": sampler_decode_steps,
+            "temp": temp,
+            "quantize": quantize,
+            "eos_threshold": eos_threshold,
+        }
+        # language and config are mutually exclusive in TTSModel.load_model.
+        if config:
+            load_kwargs["config"] = config
+        else:
+            load_kwargs["language"] = language or "english"
+
+        self._tts = TTSModel.load_model(**load_kwargs)
+        self.frames_after_eos = frames_after_eos
 
     # ------------------------------------------------------------------ #
     # Voice styles
@@ -108,7 +119,10 @@ class PocketTTSEngine:
         voice_label = voice if isinstance(voice, str) else "(style)"
         logger.debug(f"Synthesizing {len(text)} chars with voice {voice_label}…")
 
-        wav = self._tts.generate_audio(style, text.strip())
+        generate_kwargs: dict = {}
+        if self.frames_after_eos is not None:
+            generate_kwargs["frames_after_eos"] = self.frames_after_eos
+        wav = self._tts.generate_audio(style, text.strip(), **generate_kwargs)
         if hasattr(wav, "detach"):
             wav = wav.detach()
         if hasattr(wav, "cpu"):

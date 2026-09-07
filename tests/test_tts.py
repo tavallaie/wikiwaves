@@ -37,20 +37,32 @@ class FakeTTSModel:
         self.generate_calls: list[tuple] = []
 
     @classmethod
-    def load_model(cls, language="english", sampler_decode_steps=1, temp=None, quantize=False):
+    def load_model(
+        cls,
+        language=None,
+        config=None,
+        sampler_decode_steps=1,
+        temp=None,
+        quantize=False,
+        eos_threshold=-4.0,
+        **kwargs,
+    ):
         inst = cls()
         inst.language = language
+        inst.config = config
         inst.sampler_decode_steps = sampler_decode_steps
         inst.temp = temp
         inst.quantize = quantize
+        inst.eos_threshold = eos_threshold
+        inst.load_kwargs = kwargs
         return inst
 
     def get_state_for_audio_prompt(self, name):
         self.prompt_calls.append(name)
         return {"voice": name}
 
-    def generate_audio(self, state, text):
-        self.generate_calls.append((state, text))
+    def generate_audio(self, state, text, frames_after_eos=None, copy_state=True):
+        self.generate_calls.append((state, text, frames_after_eos))
         return _FakeTensor(np.ones(240, dtype=np.float32))
 
 
@@ -109,6 +121,28 @@ class TestPocketTTSEngine(unittest.TestCase):
     def test_list_voices_includes_alba(self):
         voices = self.engine.list_voices()
         self.assertIn("alba", voices)
+
+    def test_config_is_passed_instead_of_language(self):
+        from wikiwaves.tts.pocket import PocketTTSEngine
+
+        engine = PocketTTSEngine(
+            config="hf://mehdi-hf/pocket-tts-farsi/farsi.yaml",
+            temp=0.3,
+            eos_threshold=-2.0,
+            frames_after_eos=0,
+        )
+        self.assertEqual(engine._tts.config, "hf://mehdi-hf/pocket-tts-farsi/farsi.yaml")
+        self.assertIsNone(engine._tts.language)
+        self.assertEqual(engine._tts.temp, 0.3)
+        self.assertEqual(engine._tts.eos_threshold, -2.0)
+        self.assertEqual(engine.frames_after_eos, 0)
+
+    def test_synthesize_passes_frames_after_eos(self):
+        from wikiwaves.tts.pocket import PocketTTSEngine
+
+        engine = PocketTTSEngine(frames_after_eos=0)
+        engine.synthesize("Hello", voice="alba")
+        self.assertEqual(engine._tts.generate_calls[0][2], 0)
 
 
 class TestCreateEngine(unittest.TestCase):

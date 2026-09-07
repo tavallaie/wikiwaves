@@ -4,6 +4,9 @@ Usage:
     uv run python -m wikiwaves.tts.runner 2026-05-11
     uv run python -m wikiwaves.tts.runner 2026-05-11 --voice M2 --host-voice F1 --steps 5
     uv run python -m wikiwaves.tts.runner 2026-05-11 --backend pockettts --voice alba
+    uv run python -m wikiwaves.tts.runner 2026-05-11 --backend pockettts \
+        --config hf://mehdi-hf/pocket-tts-farsi/farsi.yaml \
+        --voice hf://mehdi-hf/pocket-tts-farsi/example_voice.wav
 """
 
 from __future__ import annotations
@@ -347,6 +350,11 @@ def run(
     max_chunk_length: int = 300,
     silence_duration: float = 0.3,
     backend: str = "supertonic",
+    config: str | None = None,
+    language: str | None = None,
+    temp: float | None = None,
+    eos_threshold: float | None = None,
+    frames_after_eos: int | None = None,
 ) -> list[Path]:
     """Generate audio for all scripts in a date folder."""
     date_str = date_str or datetime.date.today().isoformat()
@@ -358,10 +366,20 @@ def run(
         logger.warning("No scripts found.")
         return []
 
-    if backend in ("pockettts", "pocket") and voice == "M1":
+    # Named catalog voices such as alba are not valid for community configs.
+    if backend in ("pockettts", "pocket") and voice == "M1" and not config:
         voice = "alba"
 
-    engine = create_engine(backend=backend, total_steps=total_steps, speed=speed)
+    engine = create_engine(
+        backend=backend,
+        total_steps=total_steps,
+        speed=speed,
+        config=config,
+        language=language,
+        temp=temp,
+        eos_threshold=eos_threshold,
+        frames_after_eos=frames_after_eos,
+    )
     logger.info(
         f"TTS engine ready — default voice: {voice}, steps: {total_steps}, speed: {speed}"
     )
@@ -412,6 +430,29 @@ if __name__ == "__main__":
         choices=["supertonic", "pockettts"],
         help="TTS backend (supertonic or pockettts).",
     )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="PocketTTS model config (path, https://, or hf://). Incompatible with --language.",
+    )
+    parser.add_argument(
+        "--language",
+        default=None,
+        help="PocketTTS built-in language config (english, french_24l, ...).",
+    )
+    parser.add_argument("--temp", type=float, default=None, help="PocketTTS sampling temperature.")
+    parser.add_argument(
+        "--eos-threshold",
+        type=float,
+        default=None,
+        help="PocketTTS end-of-sequence threshold.",
+    )
+    parser.add_argument(
+        "--frames-after-eos",
+        type=int,
+        default=None,
+        help="PocketTTS frames to generate after EOS.",
+    )
     args = parser.parse_args()
 
     run(
@@ -425,4 +466,9 @@ if __name__ == "__main__":
         concat=args.concat,
         prefer=args.prefer,
         backend=args.backend,
+        config=args.config,
+        language=args.language,
+        temp=args.temp,
+        eos_threshold=args.eos_threshold,
+        frames_after_eos=args.frames_after_eos,
     )
