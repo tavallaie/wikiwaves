@@ -218,6 +218,53 @@ class TestTTSRunner(unittest.TestCase):
             self.assertTrue(paths)
             self.assertTrue(paths[0].exists())
 
+    def test_run_accepts_txt_file_path(self):
+        class FakeEngine:
+            sample_rate = 24000
+
+            def get_voice_style(self, voice_name):
+                return {"voice": voice_name}
+
+            def synthesize(self, text, voice=None, **kwargs):
+                self.last_text = text
+                return np.ones((1, 240), dtype=np.float32)
+
+            def save_audio(self, wav, path):
+                import soundfile as sf
+
+                path = Path(path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                sf.write(str(path), wav.T, self.sample_rate)
+
+        engine = FakeEngine()
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "pockettts-farsi-script.txt"
+            script.write_text(
+                "به ویکی‌ویوز خوش آمدید.\nامروز پنج رویداد را مرور می‌کنیم.\n",
+                encoding="utf-8",
+            )
+            with mock.patch(
+                "wikiwaves.tts.runner.create_engine",
+                return_value=engine,
+            ):
+                from wikiwaves.tts.runner import run
+
+                paths = run(date_str=str(script), backend="pockettts")
+
+            self.assertTrue(paths)
+            self.assertTrue(paths[0].exists())
+            self.assertIn("ویکی‌ویوز", engine.last_text)
+
+    def test_read_plain_txt_keeps_first_line(self):
+        from wikiwaves.tts.runner import read_script_txt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notes.txt"
+            path.write_text("خط اول\nخط دوم\n", encoding="utf-8")
+            seg = read_script_txt(path)
+        self.assertIn("خط اول", seg.text)
+        self.assertIn("خط دوم", seg.text)
+
 
 if __name__ == "__main__":
     unittest.main()

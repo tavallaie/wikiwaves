@@ -43,10 +43,12 @@ Default `--voice` is `M1` (Supertonic). When `--backend pockettts` and the voice
 Community models use `--config` instead of a built-in language. Named catalog voices such as `alba` do not apply. Pass a wav path, an `hf://` URI, or a URL:
 
 ```bash
-uv run python -m wikiwaves.tts.runner 2026-05-11 \
+uv run python -m wikiwaves.tts.runner output/pockettts-farsi-script.txt \
   --backend pockettts \
   --config hf://mehdi-hf/pocket-tts-farsi/farsi.yaml \
-  --voice hf://mehdi-hf/pocket-tts-farsi/example_voice.wav \
-  --temp 0.3 --eos-threshold -2 --frames-after-eos 0
+  --voice output/voice-zahra-5s.wav \
+  --steps 1 --temp 0.3 --eos-threshold -2 --frames-after-eos 0
 ```
+
+The first argument can be a date folder under `output/`, an existing directory, or a `.txt` file.
 
