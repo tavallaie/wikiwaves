@@ -111,3 +111,73 @@ AGENTS.md does not list a verify command. README does:
 ```bash
 uv run python -m unittest discover -s tests -v
 ```
+
+## Increment 2 — Switch Farsi PocketTTS to v2 (G2P phonemization)
+
+### Objective
+
+Replace the Farsi PocketTTS example/config with `mehdi-hf/pocket-tts-farsi-v2`, which needs romanised-phoneme input instead of raw Persian script.
+
+### Context
+
+- v1 (`mehdi-hf/pocket-tts-farsi`) took Persian script directly. v2 does not: it silently emits near-silence on raw Persian, because its vocabulary has no entry for Persian codepoints.
+- v2 needs a separate grapheme-to-phoneme model, `mehdi-hf/Homo-GE2PE-Persian-HF` (a `transformers` T5 model), plus text normalization shipped as `normalize_fa.py` on the v2 model card.
+- v2's `model.yaml` sets config keys (`capitalize_first_letter`, `append_terminal_punctuation`, `pad_with_spaces_for_short_inputs`) that the PyPI `pocket-tts` release rejects. The model card names a fork that supports them: `git+https://github.com/mallahyari/pocket-tts@main`.
+- User approved: switch the `pockettts` extra to the fork, add `transformers` to that same extra, auto-detect v2 configs inside `PocketTTSEngine` (no new CLI flag), and replace the v1 references in docs/examples/tests.
+
+### Impact
+
+| File | Change |
+|------|--------|
+| `pyproject.toml` | `pockettts` extra now installs the pocket-tts fork (git) and `transformers`. |
+| `src/wikiwaves/tts/farsi_normalize.py` | New. Trimmed, vendored copy of the Persian text-normalization functions from the v2 model card (no CLI, no `typer` dependency). |
+| `src/wikiwaves/tts/farsi_g2p.py` | New. `FarsiG2P` (lazy `transformers` load) and `split_persian_sentences()`. |
+| `src/wikiwaves/tts/pocket.py` | Auto-detect a v2 config in `__init__`; phonemize per sentence and concatenate in `synthesize()`. |
+| `src/wikiwaves/tts/runner.py` | Update the module docstring example to the v2 config path. |
+| `tests/test_tts.py` | Mock `transformers`; add tests for phonemization detection, sentence splitting, and the concatenated output. |
+| `docs/modules/tts.md` | Replace the v1 config example and note the new install footprint and phoneme requirement. |
+
+### Contract impact
+
+- No API JSON keys, no background jobs, no database.
+- New dependency inside the existing `pockettts` extra: `transformers`. Still off the default install.
+- `pockettts` extra now installs `pocket-tts` from a git fork instead of PyPI.
+- Waveform contract unchanged: `(1, T)` float32.
+
+### Scope cut (explicit)
+
+The model card also documents a "runaway generation" retry (regenerate when output exceeds `tokens / 3.0 + 2.0` seconds). `pocket_tts.TTSModel`'s public API does not expose the token count needed to compute that cap. Skipping the retry for this increment; documented as a known limitation instead of implemented.
+
+### Pattern
+
+Copy style from `src/wikiwaves/tts/pocket.py` (lazy import, `RuntimeError` on missing package) and `src/wikiwaves/tts/engine.py`.
+
+### Tests
+
+1. `PocketTTSEngine` with a v2-style config auto-enables phonemization.
+2. `PocketTTSEngine` with a non-v2 config (or no config) does not phonemize.
+3. `synthesize()` on multi-sentence Persian text calls `generate_audio` once per sentence and concatenates.
+4. Missing `transformers` raises `RuntimeError` mentioning `transformers`, only when a v2 config is used.
+5. `split_persian_sentences()` splits on `.`, `!`, `؟`.
+
+### Steps
+
+1. Vendor `farsi_normalize.py`.
+2. Add `farsi_g2p.py`.
+3. Wire `pocket.py` auto-detection and phonemized synthesis path.
+4. Update `pyproject.toml`, docs, runner docstring.
+5. Write/update tests.
+6. Verify.
+
+### Risk
+
+| Risk | How we find it |
+|------|-----------------|
+| v2 detection regex misses a config string variant | Match on `farsi-v2` case-insensitively; test both `hf://` and bare filename forms. |
+| `transformers` heavy import slows non-Farsi PocketTTS use | Only imported when a v2 config is detected. |
+
+### Verification
+
+```bash
+uv run python -m unittest discover -s tests -v
+```

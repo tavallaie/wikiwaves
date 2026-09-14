@@ -5,7 +5,7 @@ Usage:
     uv run python -m wikiwaves.tts.runner 2026-05-11 --voice M2 --host-voice F1 --steps 5
     uv run python -m wikiwaves.tts.runner 2026-05-11 --backend pockettts --voice alba
     uv run python -m wikiwaves.tts.runner output/pockettts-farsi-script.txt --backend pockettts \
-        --config hf://mehdi-hf/pocket-tts-farsi/farsi.yaml \
+        --config hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml \
         --voice output/voice-zahra-5s.wav
 """
 

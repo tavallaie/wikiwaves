@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 from loguru import logger
+
+# Community configs whose name matches this pattern take romanised phonemes,
+# not Persian script (e.g. hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml).
+_FARSI_V2_CONFIG_RE = re.compile(r"farsi[-_]v2", re.IGNORECASE)
+
+
+def _needs_farsi_g2p(config: str | None) -> bool:
+    """True when `config` names a PocketTTS Farsi v2 checkpoint."""
+    return bool(config) and bool(_FARSI_V2_CONFIG_RE.search(config))
 
 
 class PocketTTSEngine:
@@ -45,6 +55,20 @@ class PocketTTSEngine:
 
         self._tts = TTSModel.load_model(**load_kwargs)
         self.frames_after_eos = frames_after_eos
+
+        self._g2p = None
+        if _needs_farsi_g2p(config):
+            from wikiwaves.tts.farsi_g2p import FarsiG2P
+
+            try:
+                self._g2p = FarsiG2P()
+            except ImportError as exc:
+                raise RuntimeError(
+                    "The 'transformers' package is required for PocketTTS Farsi v2. "
+                    "Install it:\n"
+                    "  uv sync --extra pockettts\n"
+                    "  or: pip install transformers"
+                ) from exc
 
     # ------------------------------------------------------------------ #
     # Voice styles
@@ -116,6 +140,9 @@ class PocketTTSEngine:
         if not text or not text.strip():
             return np.zeros((1, 0), dtype=np.float32)
 
+        if self._g2p is not None:
+            return self._synthesize_phonemized(text.strip(), style, silence_duration)
+
         voice_label = voice if isinstance(voice, str) else "(style)"
         logger.debug(f"Synthesizing {len(text)} chars with voice {voice_label}…")
 
@@ -123,6 +150,42 @@ class PocketTTSEngine:
         if self.frames_after_eos is not None:
             generate_kwargs["frames_after_eos"] = self.frames_after_eos
         wav = self._tts.generate_audio(style, text.strip(), **generate_kwargs)
+        return self._to_numpy(wav)
+
+    def _synthesize_phonemized(
+        self,
+        text: str,
+        style: object,
+        silence_duration: float,
+    ) -> np.ndarray:
+        """Phonemize `text` sentence by sentence and synthesize each part.
+
+        G2P discards punctuation, so sentences are split before
+        phonemization and their audio is joined with a short silence gap.
+        """
+        from wikiwaves.tts.farsi_g2p import split_persian_sentences
+
+        wavs: list[np.ndarray] = []
+        for sentence in split_persian_sentences(text):
+            phonemes = self._g2p.phonemize(sentence)
+            if not phonemes.strip():
+                logger.warning(f"Phonemization emptied sentence: {sentence!r}")
+                continue
+
+            logger.debug(f"Synthesizing phonemes: {phonemes}")
+            generate_kwargs: dict = {}
+            if self.frames_after_eos is not None:
+                generate_kwargs["frames_after_eos"] = self.frames_after_eos
+            wav = self._tts.generate_audio(style, phonemes, **generate_kwargs)
+            wavs.append(self._to_numpy(wav))
+
+        if not wavs:
+            return np.zeros((1, 0), dtype=np.float32)
+        return self.concatenate(wavs, silence_sec=silence_duration, sample_rate=self.sample_rate)
+
+    @staticmethod
+    def _to_numpy(wav: object) -> np.ndarray:
+        """Convert a torch-like tensor (or array-like) to (1, T) float32."""
         if hasattr(wav, "detach"):
             wav = wav.detach()
         if hasattr(wav, "cpu"):

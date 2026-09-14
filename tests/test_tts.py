@@ -136,6 +136,7 @@ class TestPocketTTSEngine(unittest.TestCase):
         self.assertEqual(engine._tts.temp, 0.3)
         self.assertEqual(engine._tts.eos_threshold, -2.0)
         self.assertEqual(engine.frames_after_eos, 0)
+        self.assertIsNone(engine._g2p)
 
     def test_synthesize_passes_frames_after_eos(self):
         from wikiwaves.tts.pocket import PocketTTSEngine
@@ -143,6 +144,100 @@ class TestPocketTTSEngine(unittest.TestCase):
         engine = PocketTTSEngine(frames_after_eos=0)
         engine.synthesize("Hello", voice="alba")
         self.assertEqual(engine._tts.generate_calls[0][2], 0)
+
+
+class FakeG2P:
+    """Stand-in for FarsiG2P that never downloads weights."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def phonemize(self, text: str) -> str:
+        self.calls.append(text)
+        # Keep the ezafe marker "1" out; strip to a simple phoneme stub.
+        return f"ph:{text[:20]}"
+
+
+class TestFarsiV2G2P(unittest.TestCase):
+    def setUp(self):
+        self._patcher = _install_fake_pocket_tts()
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+
+    def test_v2_config_enables_g2p(self):
+        from wikiwaves.tts.pocket import PocketTTSEngine
+
+        fake = FakeG2P()
+        with mock.patch("wikiwaves.tts.farsi_g2p.FarsiG2P", return_value=fake):
+            engine = PocketTTSEngine(
+                config="hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml",
+            )
+        self.assertIs(engine._g2p, fake)
+
+    def test_non_v2_config_skips_g2p(self):
+        from wikiwaves.tts.pocket import PocketTTSEngine
+
+        engine = PocketTTSEngine(config="hf://mehdi-hf/pocket-tts-farsi/farsi.yaml")
+        self.assertIsNone(engine._g2p)
+
+    def test_no_config_skips_g2p(self):
+        from wikiwaves.tts.pocket import PocketTTSEngine
+
+        engine = PocketTTSEngine()
+        self.assertIsNone(engine._g2p)
+
+    def test_synthesize_phonemizes_each_sentence(self):
+        from wikiwaves.tts.pocket import PocketTTSEngine
+
+        fake = FakeG2P()
+        with mock.patch("wikiwaves.tts.farsi_g2p.FarsiG2P", return_value=fake):
+            engine = PocketTTSEngine(
+                config="hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml",
+                frames_after_eos=0,
+            )
+        text = "سلام، حال شما چطور است؟ امیدوارم روز خوبی داشته باشید."
+        wav = engine.synthesize(text, voice="prompt.wav", silence_duration=0.0)
+        self.assertEqual(wav.shape[0], 1)
+        self.assertEqual(wav.dtype, np.float32)
+        self.assertEqual(len(fake.calls), 2)
+        self.assertEqual(len(engine._tts.generate_calls), 2)
+        # generate_audio receives phonemes, not Persian script
+        self.assertTrue(engine._tts.generate_calls[0][1].startswith("ph:"))
+        self.assertTrue(engine._tts.generate_calls[1][1].startswith("ph:"))
+
+    def test_missing_transformers_raises_runtime_error(self):
+        from wikiwaves.tts.pocket import PocketTTSEngine
+
+        with mock.patch(
+            "wikiwaves.tts.farsi_g2p.FarsiG2P",
+            side_effect=ImportError("No module named 'transformers'"),
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                PocketTTSEngine(config="hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml")
+        self.assertIn("transformers", str(ctx.exception))
+
+    def test_split_persian_sentences(self):
+        from wikiwaves.tts.farsi_g2p import split_persian_sentences
+
+        parts = split_persian_sentences("اول. دوم! سوم؟ چهارم")
+        self.assertEqual(parts, ["اول.", "دوم!", "سوم؟", "چهارم"])
+
+
+class TestFarsiNormalize(unittest.TestCase):
+    def test_normalize_folds_arabic_yeh_and_spells_digits(self):
+        from wikiwaves.tts.farsi_normalize import normalize_for_model
+
+        out = normalize_for_model("تا سال ۲۰۳۰")
+        self.assertIn("هزار", out)
+        self.assertNotIn("ي", out)
+
+    def test_is_phonemic_passes_through(self):
+        from wikiwaves.tts.farsi_normalize import normalize_for_model
+
+        phonemes = "salAm hAle SomA Cetor ?ast"
+        self.assertEqual(normalize_for_model(phonemes), phonemes)
 
 
 class TestCreateEngine(unittest.TestCase):

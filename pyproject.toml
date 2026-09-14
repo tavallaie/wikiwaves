@@ -24,11 +24,14 @@ dependencies = [
 wikiwaves = "wikiwaves:main"
 
 [project.optional-dependencies]
-pockettts = ["pocket-tts"]
+pockettts = ["pocket-tts @ git+https://github.com/mallahyari/pocket-tts@main", "transformers>=4.40"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [dependency-groups]
 dev = [
