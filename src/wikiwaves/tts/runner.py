@@ -392,6 +392,12 @@ def run(
     # Named catalog voices such as alba are not valid for community configs.
     if backend in ("pockettts", "pocket") and voice == "M1" and not config:
         voice = "alba"
+    if backend in ("pockettts", "pocket") and config and voice == "M1":
+        raise ValueError(
+            "Community PocketTTS configs require --voice path/to/prompt.wav "
+            "(catalog names like M1/alba do not work). For Farsi v2 keep the "
+            "prompt at or under 5 seconds."
+        )
 
     engine = create_engine(
         backend=backend,

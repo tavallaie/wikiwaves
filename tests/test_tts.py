@@ -207,6 +207,33 @@ class TestFarsiV2G2P(unittest.TestCase):
         self.assertTrue(engine._tts.generate_calls[0][1].startswith("ph:"))
         self.assertTrue(engine._tts.generate_calls[1][1].startswith("ph:"))
 
+    def test_community_config_rejects_catalog_voice(self):
+        from wikiwaves.tts.pocket import PocketTTSEngine
+
+        fake = FakeG2P()
+        with mock.patch("wikiwaves.tts.farsi_g2p.FarsiG2P", return_value=fake):
+            engine = PocketTTSEngine(
+                config="hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml",
+            )
+        with self.assertRaises(ValueError) as ctx:
+            engine.get_voice_style("alba")
+        self.assertIn("voice wav", str(ctx.exception))
+
+    def test_farsi_v2_applies_model_card_defaults(self):
+        from wikiwaves.tts.pocket import PocketTTSEngine
+
+        fake = FakeG2P()
+        with mock.patch("wikiwaves.tts.farsi_g2p.FarsiG2P", return_value=fake):
+            engine = PocketTTSEngine(
+                config="hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml",
+                sampler_decode_steps=5,  # runner default
+                # eos_threshold / frames / temp left at PocketTTSEngine defaults
+            )
+        self.assertEqual(engine._tts.sampler_decode_steps, 1)
+        self.assertEqual(engine._tts.eos_threshold, -2.0)
+        self.assertEqual(engine.frames_after_eos, 0)
+        self.assertEqual(engine._tts.temp, 0.3)
+
     def test_missing_transformers_raises_runtime_error(self):
         from wikiwaves.tts.pocket import PocketTTSEngine
 
