@@ -2,29 +2,17 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 from loguru import logger
 
-# Community configs whose name matches this pattern take romanised phonemes,
-# not Persian script (e.g. hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml).
-_FARSI_V2_CONFIG_RE = re.compile(r"farsi[-_]v2", re.IGNORECASE)
-
-# Training capped voice prompts at 5.0 s; longer prompts make the model continue
-# the prompt's own speech instead of the requested text (model-card finding).
-_FARSI_V2_MAX_VOICE_SEC = 5.0
+from wikiwaves.tts.pocket_profiles import PocketProfile, resolve_profile
 
 # Near-silence after a full generation usually means the model never conditioned
 # on the text (or ran away). Surface it instead of writing a quiet WAV.
 _MIN_USEFUL_RMS = 0.01
-
-
-def _needs_farsi_g2p(config: str | None) -> bool:
-    """True when `config` names a PocketTTS Farsi v2 checkpoint."""
-    return bool(config) and bool(_FARSI_V2_CONFIG_RE.search(config))
 
 
 def _is_catalog_voice_name(voice: str) -> bool:
@@ -43,6 +31,7 @@ class PocketTTSEngine:
         self,
         language: str | None = "english",
         config: str | None = None,
+        profile: str | None = None,
         sampler_decode_steps: int = 1,
         temp: float | None = None,
         quantize: bool = False,
@@ -58,19 +47,12 @@ class PocketTTSEngine:
                 "  or: pip install pocket-tts"
             ) from exc
 
-        self._farsi_v2 = _needs_farsi_g2p(config)
-        # Farsi v2 model-card defaults. The runner's Supertonic-oriented
-        # defaults (steps=5, eos=-4, frames_after_eos=None) produce long
-        # near-silent runaways on this checkpoint.
-        if self._farsi_v2:
-            if sampler_decode_steps == 5:
-                sampler_decode_steps = 1
-            if eos_threshold == -4.0:
-                eos_threshold = -2.0
-            if frames_after_eos is None:
-                frames_after_eos = 0
-            if temp is None:
-                temp = 0.3
+        self.profile: PocketProfile = resolve_profile(
+            profile=profile, config=config, language=language
+        )
+        sampler_decode_steps, temp, eos_threshold, frames_after_eos = self._apply_profile_defaults(
+            sampler_decode_steps, temp, eos_threshold, frames_after_eos
+        )
 
         load_kwargs: dict = {
             "sampler_decode_steps": sampler_decode_steps,
@@ -86,21 +68,46 @@ class PocketTTSEngine:
 
         self._tts = TTSModel.load_model(**load_kwargs)
         self.frames_after_eos = frames_after_eos
-        self._community_config = bool(config)
 
-        self._g2p = None
-        if self._farsi_v2:
-            from wikiwaves.tts.farsi_g2p import FarsiG2P
+        self._text_prep = None
+        if self.profile.text_prep == "farsi_g2p":
+            self._text_prep = self._load_farsi_g2p()
+        elif self.profile.text_prep != "passthrough":
+            raise ValueError(f"Unknown text_prep {self.profile.text_prep!r}")
 
-            try:
-                self._g2p = FarsiG2P()
-            except ImportError as exc:
-                raise RuntimeError(
-                    "The 'transformers' package is required for PocketTTS Farsi v2. "
-                    "Install it:\n"
-                    "  uv sync --extra pockettts\n"
-                    "  or: pip install transformers"
-                ) from exc
+        logger.info(f"PocketTTS profile: {self.profile.id}")
+
+    def _apply_profile_defaults(
+        self,
+        sampler_decode_steps: int,
+        temp: float | None,
+        eos_threshold: float,
+        frames_after_eos: int | None,
+    ) -> tuple[int, float | None, float, int | None]:
+        p = self.profile
+        if p.replace_runner_step_default and sampler_decode_steps == 5 and p.default_steps is not None:
+            sampler_decode_steps = p.default_steps
+        if p.replace_runner_eos_default and eos_threshold == -4.0 and p.default_eos_threshold is not None:
+            eos_threshold = p.default_eos_threshold
+        if frames_after_eos is None and p.default_frames_after_eos is not None:
+            frames_after_eos = p.default_frames_after_eos
+        if temp is None and p.default_temp is not None:
+            temp = p.default_temp
+        return sampler_decode_steps, temp, eos_threshold, frames_after_eos
+
+    @staticmethod
+    def _load_farsi_g2p():
+        from wikiwaves.tts.farsi_g2p import FarsiG2P
+
+        try:
+            return FarsiG2P()
+        except ImportError as exc:
+            raise RuntimeError(
+                "The 'transformers' package is required for PocketTTS Farsi v2. "
+                "Install it:\n"
+                "  uv sync --extra pockettts\n"
+                "  or: pip install transformers"
+            ) from exc
 
     # ------------------------------------------------------------------ #
     # Voice styles
@@ -108,22 +115,23 @@ class PocketTTSEngine:
 
     def get_voice_style(self, voice_name: str) -> object:
         """Load a preset voice, a local audio path, an hf:// URI, or a URL."""
-        if self._community_config and _is_catalog_voice_name(voice_name):
+        if self.profile.voice_mode == "wav_required" and _is_catalog_voice_name(voice_name):
+            limit = self.profile.max_voice_sec
+            limit_hint = f" (≤{limit:.0f}s)" if limit else ""
             raise ValueError(
-                f"Community PocketTTS configs need a voice wav path, hf:// URI, or URL; "
-                f"got catalog name {voice_name!r}. Pass --voice path/to/prompt.wav "
-                f"(≤{_FARSI_V2_MAX_VOICE_SEC:.0f}s for Farsi v2)."
+                f"Profile {self.profile.id!r} needs a voice wav path, hf:// URI, or URL; "
+                f"got catalog name {voice_name!r}. Pass --voice path/to/prompt.wav{limit_hint}."
             )
-        if self._farsi_v2:
-            return self._get_voice_style_truncated(voice_name)
+        if self.profile.max_voice_sec is not None:
+            return self._get_voice_style_truncated(voice_name, self.profile.max_voice_sec)
         return self._tts.get_state_for_audio_prompt(voice_name)
 
     def get_voice_style_from_path(self, path: str | Path) -> object:
         """Load a custom voice from a local audio path, hf:// URI, or URL."""
         return self.get_voice_style(str(path))
 
-    def _get_voice_style_truncated(self, voice_name: str) -> object:
-        """Load a voice prompt, truncating local wavs to 5 seconds for Farsi v2."""
+    def _get_voice_style_truncated(self, voice_name: str, max_sec: float) -> object:
+        """Load a voice prompt, truncating local wavs to ``max_sec``."""
         path = Path(voice_name)
         if not path.is_file():
             return self._tts.get_state_for_audio_prompt(voice_name)
@@ -131,11 +139,11 @@ class PocketTTSEngine:
         audio, sr = sf.read(str(path), dtype="float32", always_2d=True)
         # soundfile returns (T, C); model wants [channels, samples]
         audio = audio.T
-        max_samples = int(_FARSI_V2_MAX_VOICE_SEC * sr)
+        max_samples = int(max_sec * sr)
         if audio.shape[-1] > max_samples:
             logger.warning(
                 f"Voice prompt {path.name} is {audio.shape[-1] / sr:.1f}s; "
-                f"truncating to {_FARSI_V2_MAX_VOICE_SEC:.0f}s for Farsi v2"
+                f"truncating to {max_sec:.0f}s for profile {self.profile.id}"
             )
             audio = audio[..., :max_samples]
         import torch
@@ -200,79 +208,76 @@ class PocketTTSEngine:
         if not text or not text.strip():
             return np.zeros((1, 0), dtype=np.float32)
 
-        if self._g2p is not None:
-            wav = self._synthesize_phonemized(text.strip(), style, silence_duration)
-            self._warn_if_near_silent(wav, text)
+        if self._text_prep is not None:
+            wav = self._synthesize_prepared(text.strip(), style, silence_duration)
+            if self.profile.warn_near_silent:
+                self._warn_if_near_silent(wav, text)
             return wav
 
         voice_label = voice if isinstance(voice, str) else "(style)"
         logger.debug(f"Synthesizing {len(text)} chars with voice {voice_label}…")
+        return self._generate_once(style, text.strip())
 
-        generate_kwargs: dict = {}
-        if self.frames_after_eos is not None:
-            generate_kwargs["frames_after_eos"] = self.frames_after_eos
-        wav = self._tts.generate_audio(style, text.strip(), **generate_kwargs)
-        return self._to_numpy(wav)
-
-    def _synthesize_phonemized(
+    def _synthesize_prepared(
         self,
         text: str,
         style: object,
         silence_duration: float,
     ) -> np.ndarray:
-        """Phonemize `text` sentence by sentence and synthesize each part.
-
-        G2P discards punctuation, so sentences are split before
-        phonemization and their audio is joined with a short silence gap.
-        """
+        """Split, prepare each sentence, synthesize, concatenate."""
         from wikiwaves.tts.farsi_g2p import split_persian_sentences
 
         wavs: list[np.ndarray] = []
         for sentence in split_persian_sentences(text):
-            phonemes = self._g2p.phonemize(sentence)
-            if not phonemes.strip():
-                logger.warning(f"Phonemization emptied sentence: {sentence!r}")
+            prepared = self._text_prep.phonemize(sentence)
+            if not prepared.strip():
+                logger.warning(f"Text prep emptied sentence: {sentence!r}")
                 continue
 
-            logger.info(f"Farsi v2 phonemes: {phonemes}")
-            arr = self._generate_phonemes_with_retry(style, phonemes)
+            logger.info(f"PocketTTS [{self.profile.id}] prepared: {prepared}")
+            if self.profile.runaway_retry:
+                arr = self._generate_with_retry(style, prepared)
+            else:
+                arr = self._generate_once(style, prepared)
             wavs.append(arr)
 
         if not wavs:
             return np.zeros((1, 0), dtype=np.float32)
         return self.concatenate(wavs, silence_sec=silence_duration, sample_rate=self.sample_rate)
 
-    def _generate_phonemes_with_retry(self, style: object, phonemes: str) -> np.ndarray:
-        """Generate once; retry when the clip hits the runaway length cap."""
+    def _generate_once(self, style: object, text: str) -> np.ndarray:
         generate_kwargs: dict = {}
         if self.frames_after_eos is not None:
             generate_kwargs["frames_after_eos"] = self.frames_after_eos
+        return self._to_numpy(self._tts.generate_audio(style, text, **generate_kwargs))
 
-        cap_sec = self._runaway_cap_sec(phonemes)
-        wav = self._to_numpy(self._tts.generate_audio(style, phonemes, **generate_kwargs))
+    def _generate_with_retry(self, style: object, text: str) -> np.ndarray:
+        """Generate once; retry when the clip hits the runaway length cap."""
+        cap_sec = self._runaway_cap_sec(text)
+        wav = self._generate_once(style, text)
         dur = wav.shape[1] / self.sample_rate
         if dur <= cap_sec:
             return wav
 
         logger.warning(
-            f"Runaway generation ({dur:.1f}s > {cap_sec:.1f}s cap) for {phonemes!r}; retrying"
+            f"Runaway generation ({dur:.1f}s > {cap_sec:.1f}s cap) for {text!r}; retrying"
         )
-        wav2 = self._to_numpy(self._tts.generate_audio(style, phonemes, **generate_kwargs))
+        wav2 = self._generate_once(style, text)
         dur2 = wav2.shape[1] / self.sample_rate
         # Keep the shorter of the two — runaways pad to the length cap.
         if dur2 < dur:
             return wav2
         return wav
 
-    def _runaway_cap_sec(self, phonemes: str) -> float:
+    def _runaway_cap_sec(self, text: str) -> float:
         """Seconds above which a clip is treated as a non-terminating runaway.
 
-        Matches the model card: ``tokens / 3.0 + 2.0``.
+        Matches the Farsi v2 model card: ``tokens / 3.0 + 2.0``.
         """
         try:
-            n_tokens = len(self._tts.flow_lm.conditioner.tokenizer.sp.encode(phonemes))
+            n_tokens = len(self._tts.flow_lm.conditioner.tokenizer.sp.encode(text))
         except Exception:
-            n_tokens = max(1, len(phonemes.split()))
+            n_tokens = max(1, len(text.split()))
         return n_tokens / 3.0 + 2.0
 
     def _warn_if_near_silent(self, wav: np.ndarray, text: str) -> None:
@@ -280,10 +285,12 @@ class PocketTTSEngine:
             return
         rms = float(np.sqrt(np.mean(wav.astype(np.float64) ** 2)))
         if rms < _MIN_USEFUL_RMS:
+            limit = self.profile.max_voice_sec
+            limit_hint = f"≤{limit:.0f}s " if limit else ""
             logger.error(
                 f"Generated audio is near-silent (rms={rms:.5f}) for {len(text)} chars. "
-                f"Check --voice is a ≤{_FARSI_V2_MAX_VOICE_SEC:.0f}s wav and that G2P ran "
-                f"(look for 'Farsi v2 phonemes:' in the log)."
+                f"Check --voice is a {limit_hint}wav and that profile {self.profile.id} "
+                f"text prep ran (look for 'prepared:' in the log)."
             )
 
     @staticmethod

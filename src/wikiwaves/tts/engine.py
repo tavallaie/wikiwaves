@@ -153,6 +153,7 @@ def create_engine(
     backend: str = "supertonic",
     config: str | None = None,
     language: str | None = None,
+    profile: str | None = None,
     temp: float | None = None,
     eos_threshold: float | None = None,
     frames_after_eos: int | None = None,
@@ -168,6 +169,8 @@ def create_engine(
             kwargs["config"] = config
         elif language:
             kwargs["language"] = language
+        if profile:
+            kwargs["profile"] = profile
         if temp is not None:
             kwargs["temp"] = temp
         if eos_threshold is not None:

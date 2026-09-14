@@ -136,7 +136,7 @@ class TestPocketTTSEngine(unittest.TestCase):
         self.assertEqual(engine._tts.temp, 0.3)
         self.assertEqual(engine._tts.eos_threshold, -2.0)
         self.assertEqual(engine.frames_after_eos, 0)
-        self.assertIsNone(engine._g2p)
+        self.assertIsNone(engine._text_prep)
 
     def test_synthesize_passes_frames_after_eos(self):
         from wikiwaves.tts.pocket import PocketTTSEngine
@@ -174,19 +174,32 @@ class TestFarsiV2G2P(unittest.TestCase):
             engine = PocketTTSEngine(
                 config="hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml",
             )
-        self.assertIs(engine._g2p, fake)
+        self.assertIs(engine._text_prep, fake)
 
-    def test_non_v2_config_skips_g2p(self):
+    def test_non_v2_config_uses_community_passthrough(self):
         from wikiwaves.tts.pocket import PocketTTSEngine
 
         engine = PocketTTSEngine(config="hf://mehdi-hf/pocket-tts-farsi/farsi.yaml")
-        self.assertIsNone(engine._g2p)
+        self.assertIsNone(engine._text_prep)
+        self.assertEqual(engine.profile.id, "community")
 
-    def test_no_config_skips_g2p(self):
+    def test_no_config_uses_official(self):
         from wikiwaves.tts.pocket import PocketTTSEngine
 
         engine = PocketTTSEngine()
-        self.assertIsNone(engine._g2p)
+        self.assertIsNone(engine._text_prep)
+        self.assertEqual(engine.profile.id, "official")
+
+    def test_explicit_profile_overrides_config_match(self):
+        from wikiwaves.tts.pocket import PocketTTSEngine
+
+        # farsi-v2 config URL, but force official text path (no G2P)
+        engine = PocketTTSEngine(
+            config="hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml",
+            profile="community",
+        )
+        self.assertEqual(engine.profile.id, "community")
+        self.assertIsNone(engine._text_prep)
 
     def test_synthesize_phonemizes_each_sentence(self):
         from wikiwaves.tts.pocket import PocketTTSEngine
@@ -250,6 +263,38 @@ class TestFarsiV2G2P(unittest.TestCase):
 
         parts = split_persian_sentences("اول. دوم! سوم؟ چهارم")
         self.assertEqual(parts, ["اول.", "دوم!", "سوم؟", "چهارم"])
+
+
+class TestPocketProfiles(unittest.TestCase):
+    def test_resolve_explicit_profile(self):
+        from wikiwaves.tts.pocket_profiles import resolve_profile
+
+        p = resolve_profile(profile="farsi-v2", config=None, language="english")
+        self.assertEqual(p.id, "farsi-v2")
+
+    def test_resolve_config_auto_detects_farsi_v2(self):
+        from wikiwaves.tts.pocket_profiles import resolve_profile
+
+        p = resolve_profile(config="hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml")
+        self.assertEqual(p.id, "farsi-v2")
+
+    def test_resolve_unmatched_config_is_community(self):
+        from wikiwaves.tts.pocket_profiles import resolve_profile
+
+        p = resolve_profile(config="hf://someone/other-model/model.yaml")
+        self.assertEqual(p.id, "community")
+
+    def test_resolve_language_is_official(self):
+        from wikiwaves.tts.pocket_profiles import resolve_profile
+
+        p = resolve_profile(language="french_24l")
+        self.assertEqual(p.id, "official")
+
+    def test_resolve_unknown_profile_raises(self):
+        from wikiwaves.tts.pocket_profiles import resolve_profile
+
+        with self.assertRaises(ValueError):
+            resolve_profile(profile="nope")
 
 
 class TestFarsiNormalize(unittest.TestCase):

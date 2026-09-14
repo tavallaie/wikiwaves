@@ -7,6 +7,7 @@ Usage:
     uv run python -m wikiwaves.tts.runner output/pockettts-farsi-script.txt --backend pockettts \
         --config hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml \
         --voice output/voice-zahra-5s.wav
+    # Optional: --profile farsi-v2|official|community to override auto-detect
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import numpy as np
 from loguru import logger
 
 from wikiwaves.tts.engine import TTSEngine, create_engine
+from wikiwaves.tts.pocket_profiles import list_profile_ids
 
 
 # --------------------------------------------------------------------------- #
@@ -378,6 +380,7 @@ def run(
     backend: str = "supertonic",
     config: str | None = None,
     language: str | None = None,
+    profile: str | None = None,
     temp: float | None = None,
     eos_threshold: float | None = None,
     frames_after_eos: int | None = None,
@@ -405,6 +408,7 @@ def run(
         speed=speed,
         config=config,
         language=language,
+        profile=profile,
         temp=temp,
         eos_threshold=eos_threshold,
         frames_after_eos=frames_after_eos,
@@ -473,6 +477,15 @@ if __name__ == "__main__":
         default=None,
         help="PocketTTS built-in language config (english, french_24l, ...).",
     )
+    parser.add_argument(
+        "--profile",
+        default=None,
+        choices=list_profile_ids(),
+        help=(
+            "PocketTTS variant profile. Auto-detected from --config/--language "
+            "when omitted; set explicitly to override."
+        ),
+    )
     parser.add_argument("--temp", type=float, default=None, help="PocketTTS sampling temperature.")
     parser.add_argument(
         "--eos-threshold",
@@ -501,6 +514,7 @@ if __name__ == "__main__":
         backend=args.backend,
         config=args.config,
         language=args.language,
+        profile=args.profile,
         temp=args.temp,
         eos_threshold=args.eos_threshold,
         frames_after_eos=args.frames_after_eos,
