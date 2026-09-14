@@ -240,6 +240,33 @@ class TestFarsiNormalize(unittest.TestCase):
         self.assertEqual(normalize_for_model(phonemes), phonemes)
 
 
+class TestFarsiG2PPhonemize(unittest.TestCase):
+    def test_phonemize_strips_ezafe_marker(self):
+        """G2P may emit '1' for ezafe; PocketTTS must not see that digit."""
+        from contextlib import nullcontext
+
+        class FakeTok:
+            def __call__(self, texts, add_special_tokens=False, return_tensors=None):
+                return {"input_ids": [[1, 2]]}
+
+            def batch_decode(self, out, skip_special_tokens=True):
+                return ["?eqtesAde1 ?AmrikA"]
+
+        class FakeModel:
+            def generate(self, **kwargs):
+                return [[0]]
+
+        from wikiwaves.tts.farsi_g2p import FarsiG2P
+
+        g2p = object.__new__(FarsiG2P)
+        g2p._torch = types.SimpleNamespace(no_grad=nullcontext)
+        g2p._tokenizer = FakeTok()
+        g2p._model = FakeModel()
+        out = g2p.phonemize("اقتصاد آمریکا")
+        self.assertNotIn("1", out)
+        self.assertIn("?eqtesAde", out)
+
+
 class TestCreateEngine(unittest.TestCase):
     def setUp(self):
         self._patcher = _install_fake_pocket_tts()

@@ -57,4 +57,7 @@ class FarsiG2P:
         with self._torch.no_grad():
             out = self._model.generate(**enc, num_beams=5, max_length=512, early_stopping=True)
         raw = self._tokenizer.batch_decode(out, skip_special_tokens=True)[0].strip()
-        return raw.translate(_TO_PHONEMES)
+        # G2P marks ezafe with "1" so a chunker can keep noun phrases
+        # together. PocketTTS itself has no entry for that digit — strip it
+        # before the model sees the text (model-card usage).
+        return raw.translate(_TO_PHONEMES).replace("1", "")
