@@ -3,6 +3,11 @@
 Usage:
     uv run python -m wikiwaves.tts.runner 2026-05-11
     uv run python -m wikiwaves.tts.runner 2026-05-11 --voice M2 --host-voice F1 --steps 5
+    uv run python -m wikiwaves.tts.runner 2026-05-11 --backend pockettts --voice alba
+    uv run python -m wikiwaves.tts.runner output/pockettts-farsi-script.txt --backend pockettts \
+        --config hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml \
+        --voice output/voice-zahra-5s.wav
+    # Optional: --profile farsi-v2|official|community to override auto-detect
 """
 
 from __future__ import annotations
@@ -18,7 +23,8 @@ from typing import Callable
 import numpy as np
 from loguru import logger
 
-from wikiwaves.tts.engine import TTSEngine
+from wikiwaves.tts.engine import TTSEngine, create_engine
+from wikiwaves.tts.pocket_profiles import list_profile_ids
 
 
 # --------------------------------------------------------------------------- #
@@ -69,6 +75,14 @@ def read_script_txt(path: Path) -> ScriptSegment:
 
     lines = content.splitlines()
     fname = path.stem.lower()
+    has_header = any(
+        line.strip().startswith("Duration:") or line.strip().startswith("-" * 3)
+        for line in lines
+    )
+
+    # A plain text file (no intro/transition name, no header) is spoken as-is.
+    if "intro" not in fname and "transition" not in fname and not has_header:
+        return ScriptSegment(seg_type="topic", title=path.stem, text=content.strip())
 
     # Detect type from filename content
     if "intro" in fname:
@@ -137,6 +151,24 @@ def read_scripts(day_dir: Path, prefer: str = "txt") -> list[ScriptSegment]:
         return read_scripts_from_txts(day_dir)
 
     raise FileNotFoundError(f"No scripts found in {day_dir}")
+
+
+def resolve_script_input(
+    source: str,
+    output_dir: str,
+    prefer: str = "txt",
+) -> tuple[list[ScriptSegment], Path]:
+    """Load scripts from a date key, an existing directory, or a .txt file.
+
+    Returns (segments, audio_dir).
+    """
+    raw = Path(source)
+    if raw.is_file() and raw.suffix.lower() == ".txt":
+        return [read_script_txt(raw)], raw.parent / "audio"
+    if raw.is_dir():
+        return read_scripts(raw, prefer=prefer), raw / "audio"
+    day_dir = Path(output_dir) / source
+    return read_scripts(day_dir, prefer=prefer), day_dir / "audio"
 
 
 # --------------------------------------------------------------------------- #
@@ -345,18 +377,42 @@ def run(
     voice_mapper: Callable[[ScriptSegment, str, str | None], str] | None = None,
     max_chunk_length: int = 300,
     silence_duration: float = 0.3,
+    backend: str = "supertonic",
+    config: str | None = None,
+    language: str | None = None,
+    profile: str | None = None,
+    temp: float | None = None,
+    eos_threshold: float | None = None,
+    frames_after_eos: int | None = None,
 ) -> list[Path]:
-    """Generate audio for all scripts in a date folder."""
+    """Generate audio for all scripts in a date folder, directory, or .txt file."""
     date_str = date_str or datetime.date.today().isoformat()
-    day_dir = Path(output_dir) / date_str
-    audio_dir = day_dir / "audio"
-
-    segments = read_scripts(day_dir, prefer=prefer)
+    segments, audio_dir = resolve_script_input(date_str, output_dir, prefer=prefer)
     if not segments:
         logger.warning("No scripts found.")
         return []
 
-    engine = TTSEngine(total_steps=total_steps, speed=speed)
+    # Named catalog voices such as alba are not valid for community configs.
+    if backend in ("pockettts", "pocket") and voice == "M1" and not config:
+        voice = "alba"
+    if backend in ("pockettts", "pocket") and config and voice == "M1":
+        raise ValueError(
+            "Community PocketTTS configs require --voice path/to/prompt.wav "
+            "(catalog names like M1/alba do not work). For Farsi v2 keep the "
+            "prompt at or under 5 seconds."
+        )
+
+    engine = create_engine(
+        backend=backend,
+        total_steps=total_steps,
+        speed=speed,
+        config=config,
+        language=language,
+        profile=profile,
+        temp=temp,
+        eos_threshold=eos_threshold,
+        frames_after_eos=frames_after_eos,
+    )
     logger.info(
         f"TTS engine ready — default voice: {voice}, steps: {total_steps}, speed: {speed}"
     )
@@ -390,7 +446,11 @@ def run(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate podcast audio from scripts.")
-    parser.add_argument("date", nargs="?", help="Date folder (YYYY-MM-DD). Defaults to today.")
+    parser.add_argument(
+        "date",
+        nargs="?",
+        help="Date folder (YYYY-MM-DD), a script directory, or a .txt file. Defaults to today.",
+    )
     parser.add_argument("--output-dir", default="output", help="Output directory.")
     parser.add_argument("--voice", default="M1", help="Default narrator voice.")
     parser.add_argument("--host-voice", default=None, help="Host voice for intro/transitions.")
@@ -400,6 +460,44 @@ if __name__ == "__main__":
     parser.add_argument("--concat", action="store_true", help="Also concatenate into episode.wav (deprecated: use assembler instead).")
     parser.add_argument(
         "--prefer", default="txt", choices=["json", "txt"], help="Prefer .txt files or scripts.json."
+    )
+    parser.add_argument(
+        "--backend",
+        default="supertonic",
+        choices=["supertonic", "pockettts"],
+        help="TTS backend (supertonic or pockettts).",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="PocketTTS model config (path, https://, or hf://). Incompatible with --language.",
+    )
+    parser.add_argument(
+        "--language",
+        default=None,
+        help="PocketTTS built-in language config (english, french_24l, ...).",
+    )
+    parser.add_argument(
+        "--profile",
+        default=None,
+        choices=list_profile_ids(),
+        help=(
+            "PocketTTS variant profile. Auto-detected from --config/--language "
+            "when omitted; set explicitly to override."
+        ),
+    )
+    parser.add_argument("--temp", type=float, default=None, help="PocketTTS sampling temperature.")
+    parser.add_argument(
+        "--eos-threshold",
+        type=float,
+        default=None,
+        help="PocketTTS end-of-sequence threshold.",
+    )
+    parser.add_argument(
+        "--frames-after-eos",
+        type=int,
+        default=None,
+        help="PocketTTS frames to generate after EOS.",
     )
     args = parser.parse_args()
 
@@ -413,4 +511,11 @@ if __name__ == "__main__":
         silence_between=args.silence,
         concat=args.concat,
         prefer=args.prefer,
+        backend=args.backend,
+        config=args.config,
+        language=args.language,
+        profile=args.profile,
+        temp=args.temp,
+        eos_threshold=args.eos_threshold,
+        frames_after_eos=args.frames_after_eos,
     )
